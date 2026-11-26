@@ -86,6 +86,9 @@ pub const USER_VIEW_RECORDS: u32 = 0x105;
 /// keeps all threads of every dispatched group active. The metadata's
 /// `dword` holds the group's X width, `index` the host binding.
 pub const USER_DISPATCH_THREADS_X: u32 = 0x106;
+/// Number of title view slots retained in the resource heap bound for
+/// this draw. The host's dynamic descriptors start at this boundary.
+pub const USER_TITLE_VIEW_COUNT: u32 = 0x107;
 
 /// `ShaderFlags` bits (metadata) and their `SFI0` feature bits.
 pub(crate) mod flags {
@@ -469,6 +472,14 @@ impl Shader {
             216,
             &[h, p],
         )
+    }
+
+    /// A title-originated index can only read the retained title slots.
+    /// Host-generated table and page-directory indices bypass this bound.
+    pub fn title_view_index(&mut self, block: usize, index: V, count: V, null: u32) -> V {
+        let inside = self.m.cmp(block, super::bitcode::pred::IULT, index, count);
+        let null = self.m.i32(null);
+        self.m.select(block, inside, index, null)
     }
 
     /// A descriptor heap handle, annotated with `props`; `nonuniform` when

@@ -960,6 +960,14 @@ impl State {
         if kind == USER_MEMORY_BASE {
             return memory.map_or(0, |m| if dword == 0 { m.base } else { m.count });
         }
+        if kind == victory_shader::emit::USER_TITLE_VIEW_COUNT {
+            return self.heaps.iter().copied()
+                .filter(|&heap| heap != 0)
+                .map(|heap| crate::descriptor::heap(heap as This))
+                .find(|heap| !heap.samplers())
+                .and_then(|heap| heap.host())
+                .map_or(0, crate::descriptor::host::HostHeap::count);
+        }
         if kind == USER_VIEW_BIAS {
             // The view begins on 16 bytes of the copy the address finds
             // (`root_uav`, `root_srv_table`).

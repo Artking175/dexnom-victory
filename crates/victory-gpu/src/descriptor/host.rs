@@ -973,9 +973,9 @@ fn dynamic_slots_set() -> Option<u32> {
 /// A 606,784-slot pool removed table refusals in one open-world capture
 /// on RTX 5060 Ti. Keep the original boundary by default until other
 /// workloads establish that the replaced slots are only table entries.
-/// A direct title heap index into that range can still name a dynamic
-/// descriptor. The shader's heap bound only excludes indices past the
-/// end of the native heap.
+/// Direct indices for float-readable 2D texture SRVs are bounded by the
+/// retained title count. Other view shapes still need typed null slots,
+/// so an index into the removed range can alias a dynamic descriptor.
 ///
 /// A table that reaches past the retained title slots is made afresh.
 fn capped_dynamic_slots(null: u32, set: Option<u32>) -> u32 {
@@ -1036,10 +1036,11 @@ impl HostHeap {
             let fitted = if count <= null - extra {
                 count
             } else {
-                // shortcut: descriptors past the host's limit are left out; a title that reaches
-                // them needs remapping. They read the null slot instead.
-                tracing::warn!(count, "host view heap capped at {size}; views past it read a null slot");
-                null - extra
+                // The host does not mirror title slots above the fitted
+                // count. Descriptor tables are rebuilt separately.
+                let fitted = null - extra;
+                tracing::warn!(count, retained_title_slots = fitted, "host view heap capped at {size}");
+                fitted
             };
             match make(size) {
                 Ok(heap) => (heap, fitted, size),

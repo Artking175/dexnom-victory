@@ -966,32 +966,21 @@ fn dynamic_slots_set() -> Option<u32> {
     *SET.get_or_init(|| std::env::var("VICTORY_DYNAMIC_SLOTS").ok().and_then(|v| v.trim().parse().ok()))
 }
 
-/// The dynamic slots of a host heap capped below [`PORTABLE_VIEWS`]
-/// (NVIDIA; its null slot is `null`) for a title heap of `count` slots that
-/// does not fit in it with [`DYNAMIC`] more: they come out of the title's.
-/// `set` is `VICTORY_DYNAMIC_SLOTS` (at least [`DYNAMIC`], which is what
-/// every such heap had before, and leaving the title [`LEAST_TITLE`]
-/// slots).
+/// The dynamic slots of a capped host heap that cannot hold all the title
+/// views plus [`DYNAMIC`]. An explicit `VICTORY_DYNAMIC_SLOTS` request can
+/// take more slots from the title, leaving at least [`LEAST_TITLE`].
 ///
-/// Unset, the title keeps its lower 393,215 slots, where its long-lived
-/// views are. From slot 393,216 on the retail title's heap (1,245,184
-/// slots) is a ring of the tables it writes for each draw: every 256-slot
-/// page of it held views, rewritten all the time, and all 507,205 views
-/// seen past slot 737,855 were in tables made afresh for a draw
-/// (`draw.rs`, `tables`), none a view only an index reaches. Those tables
-/// are made in the dynamic slots anyway, so host slots kept for the ring
-/// stood unused while 262,144 dynamic ones ran dry every frame (a frame
-/// asks for about 200,000 and holds them until the GPU has run it; 13,000
-/// to 60,000 tables were refused per 5 s and their draws dropped). With
-/// 606,784: none refused, 350,000 free at the fewest (RTX 5060 Ti, open
-/// world, measured in a fork of avatarmanz/VIctory-7900XTX).
+/// A 606,784-slot pool removed table refusals in one open-world capture
+/// on RTX 5060 Ti. Keep the original boundary by default until other
+/// workloads establish that the replaced slots are only table entries.
+/// A direct title heap index into that range can still name a dynamic
+/// descriptor. The shader's heap bound only excludes indices past the
+/// end of the native heap.
 ///
-/// The title's slots past the ones left have no host slot: a table
-/// reaching there is made afresh for its draw, as it was past 737,855.
-fn capped_dynamic_slots(count: u32, null: u32, set: Option<u32>) -> u32 {
-    const CAPPED_TITLE: u32 = 393_215;
+/// A table that reaches past the retained title slots is made afresh.
+fn capped_dynamic_slots(null: u32, set: Option<u32>) -> u32 {
     let most = null.saturating_sub(LEAST_TITLE).max(DYNAMIC);
-    set.unwrap_or(null.saturating_sub(CAPPED_TITLE.min(count))).clamp(DYNAMIC, most)
+    set.unwrap_or(DYNAMIC).clamp(DYNAMIC, most)
 }
 const NULL_BLOCK: u32 = 1 << 16;
 
@@ -1027,10 +1016,10 @@ impl HostHeap {
         } else {
             victory_shader::emit::view_heap_limit()
         };
-        // A title heap a capped host heap does not hold whole gives up its
-        // upper slots, a ring of per-draw tables, for dynamic ones.
+        // A capped heap only reallocates more of the title's slots when
+        // requested explicitly.
         let extra = if null != 0 && null < PORTABLE_VIEWS && count + extra > null {
-            capped_dynamic_slots(count, null, dynamic_slots_set())
+            capped_dynamic_slots(null, dynamic_slots_set())
         } else {
             extra
         };
@@ -4868,19 +4857,14 @@ mod tests {
         assert_eq!(heap.dynamic(40), Some(4 + heap.dynamic - 40));
     }
 
-    /// A title heap too big for a capped host heap (NVIDIA: the null slot
-    /// at 999,999) keeps its lower 393,215 slots unless
-    /// `VICTORY_DYNAMIC_SLOTS` says how many are dynamic: no fewer than
-    /// [`DYNAMIC`], and leaving the title [`LEAST_TITLE`].
+    /// A larger pool on capped hardware requires an explicit request.
     #[test]
-    fn a_capped_heap_gives_its_upper_slots_to_dynamic_ones() {
+    fn a_capped_heap_keeps_its_title_split_by_default() {
         let null = 999_999;
-        assert_eq!(capped_dynamic_slots(1_245_184, null, None), 606_784);
-        assert_eq!(capped_dynamic_slots(800_000, null, None), 606_784);
-        assert_eq!(capped_dynamic_slots(1_245_184, null, Some(DYNAMIC)), DYNAMIC);
-        assert_eq!(capped_dynamic_slots(1_245_184, null, Some(500_000)), 500_000);
-        assert_eq!(capped_dynamic_slots(1_245_184, null, Some(10)), DYNAMIC);
-        assert_eq!(capped_dynamic_slots(1_245_184, null, Some(u32::MAX)), null - LEAST_TITLE);
+        assert_eq!(capped_dynamic_slots(null, None), DYNAMIC);
+        assert_eq!(capped_dynamic_slots(null, Some(606_784)), 606_784);
+        assert_eq!(capped_dynamic_slots(null, Some(10)), DYNAMIC);
+        assert_eq!(capped_dynamic_slots(null, Some(u32::MAX)), null - LEAST_TITLE);
     }
 
     #[test]

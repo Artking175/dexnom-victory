@@ -520,13 +520,16 @@ impl DispatchTrace {
 
     pub(crate) fn record(&self, indirect: bool) {
         let counter = if indirect { &self.indirect_recorded } else { &self.direct_recorded };
-        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        counter.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
     fn counts(&self) -> [u64; 4] {
-        [&self.direct_attempted, &self.direct_recorded,
-            &self.indirect_attempted, &self.indirect_recorded]
-            .map(|counter| counter.load(std::sync::atomic::Ordering::Relaxed))
+        use std::sync::atomic::Ordering::{Acquire, Relaxed};
+        // Observe a recorded command before reading the attempt count.
+        let direct_recorded = self.direct_recorded.load(Acquire);
+        let indirect_recorded = self.indirect_recorded.load(Acquire);
+        [self.direct_attempted.load(Relaxed), direct_recorded,
+            self.indirect_attempted.load(Relaxed), indirect_recorded]
     }
 }
 
@@ -557,12 +560,10 @@ pub(crate) fn dispatch_trace(this: This) -> Option<&'static DispatchTrace> {
 
 #[cfg(all(windows, feature = "diagnostics"))]
 pub(crate) fn report_dispatch_traces(frame: u64) {
-    if frame == 1 || frame.is_multiple_of(64) {
-        for (hash, trace) in dispatch_traces() {
-            let [direct_attempted, direct_recorded, indirect_attempted, indirect_recorded] = trace.counts();
-            tracing::info!(%hash, frame, direct_attempted, direct_recorded,
-                indirect_attempted, indirect_recorded, "selected compute dispatch recording totals");
-        }
+    for (hash, trace) in dispatch_traces() {
+        let [direct_attempted, direct_recorded, indirect_attempted, indirect_recorded] = trace.counts();
+        tracing::info!(%hash, frame, direct_attempted, direct_recorded,
+            indirect_attempted, indirect_recorded, "selected compute dispatch recording totals");
     }
 }
 

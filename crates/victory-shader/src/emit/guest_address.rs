@@ -79,7 +79,7 @@ impl Lower<'_> {
     }
 
     pub(super) fn picked_address(&mut self, site: Site) -> Result<(V, V), Why> {
-        let slot = self.heap_index(site, 0, false)?;
+        let slot = self.heap_index(site, 0, false, false)?;
         let c = self.cur;
         let handle = self.s.root_srv_handle(crate::emit::SLOT_VIEW_ADDRESSES);
         let undef = self.s.m.undef(self.s.t.i32);

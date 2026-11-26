@@ -780,6 +780,8 @@ extern "system" fn present(
     release_held(forces());
     let frame = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     #[cfg(all(windows, feature = "diagnostics"))]
+    crate::pipeline::report_dispatch_traces(frame);
+    #[cfg(all(windows, feature = "diagnostics"))]
     if frame.is_power_of_two()
         && std::env::var_os("VICTORY_TRACE_PRESENT_PLANES").is_some()
         && planes > 0

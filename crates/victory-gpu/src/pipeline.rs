@@ -500,6 +500,72 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
         .map(|shader| shader.hash.as_str())
 }
 
+/// Command recording counts for a selected compute shader. An indirect
+/// recording can still read a count of zero when it runs on the GPU.
+#[cfg(all(windows, feature = "diagnostics"))]
+#[derive(Default)]
+pub(crate) struct DispatchTrace {
+    direct_attempted: std::sync::atomic::AtomicU64,
+    direct_recorded: std::sync::atomic::AtomicU64,
+    indirect_attempted: std::sync::atomic::AtomicU64,
+    indirect_recorded: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+impl DispatchTrace {
+    pub(crate) fn attempt(&self, indirect: bool) {
+        let counter = if indirect { &self.indirect_attempted } else { &self.direct_attempted };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn record(&self, indirect: bool) {
+        let counter = if indirect { &self.indirect_recorded } else { &self.direct_recorded };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn counts(&self) -> [u64; 4] {
+        [&self.direct_attempted, &self.direct_recorded,
+            &self.indirect_attempted, &self.indirect_recorded]
+            .map(|counter| counter.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// VICTORY_TRACE_DISPATCHES takes a comma-separated list of compute hashes.
+/// The normal path has no counters or log output when the list is empty.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn dispatch_traces() -> &'static [(String, DispatchTrace)] {
+    static TRACES: OnceLock<Vec<(String, DispatchTrace)>> = OnceLock::new();
+    TRACES.get_or_init(|| {
+        let value = std::env::var("VICTORY_TRACE_DISPATCHES").unwrap_or_default();
+        let mut hashes = parse_shader_hashes(&value, "VICTORY_TRACE_DISPATCHES");
+        hashes.sort_unstable();
+        hashes.dedup();
+        hashes.into_iter().map(|hash| (hash, DispatchTrace::default())).collect()
+    })
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn dispatch_trace(this: This) -> Option<&'static DispatchTrace> {
+    let traces = dispatch_traces();
+    if traces.is_empty() || this.is_null() {
+        return None;
+    }
+    let shader = pipeline(this).shaders.first().filter(|s| s.stage == "compute")?;
+    let at = traces.binary_search_by(|(hash, _)| hash.cmp(&shader.hash)).ok()?;
+    Some(&traces[at].1)
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn report_dispatch_traces(frame: u64) {
+    if frame == 1 || frame.is_multiple_of(64) {
+        for (hash, trace) in dispatch_traces() {
+            let [direct_attempted, direct_recorded, indirect_attempted, indirect_recorded] = trace.counts();
+            tracing::info!(%hash, frame, direct_attempted, direct_recorded,
+                indirect_attempted, indirect_recorded, "selected compute dispatch recording totals");
+        }
+    }
+}
+
 /// Recording-time trace, independent of the present and heavy-frame capture.
 /// The budget is per shader so that a frequent stage cannot silence a later stage.
 #[cfg(all(windows, feature = "diagnostics"))]
@@ -987,6 +1053,20 @@ mod tests {
             super::parse_shader_hashes(" 0123456789ABCDEF, 0123456789abcde, xyz, 0011223344556677,", "test"),
             ["0123456789abcdef", "0011223344556677"]
         );
+    }
+
+    #[cfg(all(windows, feature = "diagnostics"))]
+    #[test]
+    fn dispatch_trace_distinguishes_attempts_from_recordings() {
+        let trace = super::DispatchTrace::default();
+        assert_eq!(trace.counts(), [0, 0, 0, 0]);
+        trace.attempt(false);
+        trace.attempt(false);
+        trace.record(false);
+        trace.attempt(true);
+        assert_eq!(trace.counts(), [2, 1, 1, 0]);
+        trace.record(true);
+        assert_eq!(trace.counts(), [2, 1, 1, 1]);
     }
 
     use super::*;
